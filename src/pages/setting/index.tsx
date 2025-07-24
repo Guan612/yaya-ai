@@ -3,7 +3,10 @@ import { Link } from "react-router";
 export default function Setting() {
   return (
     <div className="flex flex-col gap-2 w-full max-w-4xl mx-auto p-2">
-      <Link to={"/setting/modelporvider"} className="btn btn-block btn-info btn-lg md:btn-2xl justify-between">
+      <Link
+        to={"/setting/modelporvider"}
+        className="btn btn-block btn-info btn-lg md:btn-2xl justify-between"
+      >
         <div className="flex justify-center items-center">
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -37,7 +40,10 @@ export default function Setting() {
         </svg>
       </Link>
 
-      <button className="btn btn-block btn-info btn-lg md:btn-2xl justify-between">
+      <Link
+        to={"/setting/defaultmodel"}
+        className="btn btn-block btn-info btn-lg md:btn-2xl justify-between"
+      >
         <div className="flex justify-center items-center">
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -69,7 +75,7 @@ export default function Setting() {
             d="M9 5l7 7-7 7"
           />
         </svg>
-      </button>
+      </Link>
       <button className="btn btn-block btn-info btn-lg md:btn-2xl justify-between">
         <div className="flex justify-center items-center">
           <svg

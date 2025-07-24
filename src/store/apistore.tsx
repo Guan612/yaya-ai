@@ -46,7 +46,6 @@ const useApiStore = create((set) => ({
     await apiStore.set("api", apiInfo);
     // c. 确保数据被保存到磁盘
     await apiStore.save();
-    console.log("数据已确认保存到硬盘！值为:", apiInfo);
   },
 
   /**
