@@ -1,15 +1,47 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
+pub mod commands;
+pub mod db;
+pub mod entities;
+pub mod error;
+pub mod services;
+pub mod state;
+use std::collections::linked_list;
+
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet])
+        .invoke_handler(tauri::generate_handler![
+            commands::send_user_message,
+            commands::get_chat_history,
+            commands::clear_chat
+        ])
+        .setup(|app| {
+            // --- 数据库初始化开始 ---
+            let handle = app.handle().clone();
+
+            // 因为数据库连接是异步的，我们需要用 tauri::async_runtime
+            tauri::async_runtime::block_on(async move {
+                match db::establish_connection(&handle).await {
+                    Ok(db) => {
+                        println!("数据库连接成功！");
+                        // 将数据库连接由 Tauri 管理 (Manage State)
+                        handle.manage(state::AppState { db });
+                    }
+                    Err(e) => {
+                        eprintln!("数据库初始化失败: {}", e);
+                        // 在生产环境中，这里应该发送一个前端事件通知用户
+                        panic!("无法初始化数据库: {}", e);
+                    }
+                }
+            });
+            // --- 数据库初始化结束 ---
+
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
