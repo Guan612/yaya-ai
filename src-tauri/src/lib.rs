@@ -5,9 +5,13 @@ pub mod entities;
 pub mod error;
 pub mod services;
 pub mod state;
-use std::collections::linked_list;
 
 use tauri::Manager;
+
+use crate::{
+    services::{ai::AiService, chat::ChatService, session::SessionService},
+    state::AppState,
+};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -17,7 +21,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::send_user_message,
             commands::get_chat_history,
-            commands::clear_chat
+            commands::clear_chat,
+            commands::create_new_chat,
+            commands::get_sessions
         ])
         .setup(|app| {
             // --- 数据库初始化开始 ---
@@ -29,7 +35,20 @@ pub fn run() {
                     Ok(db) => {
                         println!("数据库连接成功！");
                         // 将数据库连接由 Tauri 管理 (Manage State)
-                        handle.manage(state::AppState { db });
+                        // 1. 初始化 ChatService
+                        let chat_service = ChatService::new(&db);
+
+                        // 2. 初始化 AiService (注入 ChatService)
+                        let ai_service = AiService::new(chat_service.clone());
+
+                        let session_service = SessionService::new(&db);
+
+                        // 3. 存入 State
+                        handle.manage(AppState {
+                            chat_service,
+                            ai_service,
+                            session_service,
+                        });
                     }
                     Err(e) => {
                         eprintln!("数据库初始化失败: {}", e);
