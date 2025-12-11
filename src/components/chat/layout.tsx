@@ -34,7 +34,7 @@ export default function ChatLayout() {
       </Sheet>
 
       {/* --- 主聊天区域 (Main Chat Area) --- */}
-      <main className="flex flex-1 flex-col overflow-hidden">
+      <main className="flex flex-1 flex-col min-h-0 h-[100dvh] overflow-hidden">
         {/* 顶部导航栏 (仅移动端显示菜单按钮) */}
         <header className="flex h-14 items-center gap-2 border-b px-4 md:hidden">
           <Sheet open={isMobileOpen} onOpenChange={setIsMobileOpen}>
@@ -49,8 +49,8 @@ export default function ChatLayout() {
         </header>
 
         {/* 真正的聊天对话框区域 */}
-        <div className="flex-1 overflow-auto p-4">
-          <div className="flex h-full items-center justify-center text-muted-foreground border-2 border-dashed rounded-lg">
+        <div className="flex-1 flex flex-col min-h-0 overflow-hidden relative">
+          <div className="h-full w-full">
             <ChatArea />
           </div>
         </div>

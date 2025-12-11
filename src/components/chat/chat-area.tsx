@@ -121,37 +121,42 @@ export function ChatArea() {
   };
 
   return (
-    <div className="flex flex-col h-full w-full max-w-3xl mx-auto">
-      {/* 消息列表区域 */}
-      <ScrollArea className="flex-1 p-4">
-        <div className="space-y-4 pb-4">
-          {messages.length === 0 ? (
-            <div className="text-center text-muted-foreground mt-20">
-              <p>暂无消息，开始一段新的对话吧！</p>
-            </div>
-          ) : (
-            messages.map((msg) => <MessageBubble key={msg.id} message={msg} />)
-          )}
-          {/* 这是一个不可见的锚点，用于滚动到底部 */}
-          <div ref={scrollRef} />
-        </div>
-      </ScrollArea>
+    // 1. 外层容器：h-full 撑满高度，overflow-hidden 禁止外层滚动
+    <div className="flex flex-col h-full w-full max-w-5xl mx-auto overflow-hidden">
+      {/* 2. 消息列表区：flex-1 自动占据所有剩余空间 */}
+      <div className="flex-1 overflow-hidden flex flex-col">
+        <ScrollArea className="h-full w-full px-4">
+          <div className="space-y-6 py-6">
+            {messages.length === 0 ? (
+              <div className="text-center text-muted-foreground mt-20">
+                <p>暂无消息，开始一段新的对话吧！</p>
+              </div>
+            ) : (
+              messages.map((msg) => (
+                <MessageBubble key={msg.id} message={msg} />
+              ))
+            )}
+            {/* 锚点：用于自动滚动到底部 */}
+            <div ref={scrollRef} className="h-1" />
+          </div>
+        </ScrollArea>
+      </div>
 
-      {/* 底部输入框区域 */}
-      <div className="p-4 border-t bg-background">
-        <div className="relative flex items-end gap-2">
+      {/* 3. 输入框区：shrink-0 防止被压缩，z-10 确保层级 */}
+      <div className="shrink-0 p-4 border-t bg-background z-10">
+        <div className="relative flex items-end gap-2 bg-muted/30 p-2 rounded-xl border focus-within:ring-1 focus-within:ring-ring">
           <Textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="输入消息..."
-            className="min-h-[60px] max-h-[200px] resize-none pr-12"
+            className="min-h-[50px] max-h-[150px] w-full resize-none border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0 shadow-none"
           />
           <Button
             onClick={handleSend}
             disabled={isLoading || !input.trim()}
             size="icon"
-            className="mb-1"
+            className="mb-0.5 shrink-0 rounded-lg"
           >
             {isLoading ? (
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -160,7 +165,7 @@ export function ChatArea() {
             )}
           </Button>
         </div>
-        <div className="text-xs text-muted-foreground text-center mt-2">
+        <div className="text-[10px] text-muted-foreground text-center mt-2">
           由 Tauri + Rust + React 驱动
         </div>
       </div>
