@@ -1,73 +1,132 @@
+use crate::state::AppState;
+use crate::{error::AppResult, services::chat::ChatService};
 use futures::StreamExt;
 use reqwest::Client;
-use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::{
-    db,
-    error::AppResult,
-    services::chat::ChatService,
-    state::{self, AppState},
-};
+// --- 1. 配置区域 (你可以改为从环境变量或设置里读取) ---
+const API_BASE_URL: &str = "http://127.0.0.1:1337/v1/chat/completions"; // 或者你的第三方中转地址
+const API_KEY: &str = "123"; // 替换你的 Key
+const MODEL_NAME: &str = "qiyue0726\\neko_f16_gemma_3_270m_it"; // 或者 deepseek-chat, moonshot-v1 等
 
-// 定义 Ollama 的请求结构 (或是 OpenAI)
+// --- 2. OpenAI 请求结构 ---
 #[derive(Serialize)]
-struct OllamaRequest {
+struct OpenAIMessage {
+    role: String,
+    content: String,
+}
+
+#[derive(Serialize)]
+struct OpenAIRequest {
     model: String,
-    prompt: String,
+    messages: Vec<OpenAIMessage>,
     stream: bool,
+    // temperature: f32, // 可选
 }
 
-// 定义 Ollama 的响应结构 (片段)
-#[derive(Deserialize)]
-struct OllamaResponse {
-    response: String,
-    done: bool,
+// --- 3. OpenAI 响应结构 (流式 Delta) ---
+#[derive(Deserialize, Debug)]
+struct OpenAIStreamResponse {
+    choices: Vec<StreamChoice>,
 }
 
-// 定义发送给前端的事件负载
+#[derive(Deserialize, Debug)]
+struct StreamChoice {
+    delta: StreamDelta,
+    // finish_reason: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
+struct StreamDelta {
+    content: Option<String>, // 注意：内容可能是 None (例如结束包)
+}
+
+// --- 4. 发送给前端的事件负载 ---
 #[derive(Clone, Serialize, Debug)]
 struct StreamPayload {
     chunk: String,
     done: bool,
 }
 
-pub struct AiService;
+#[derive(Clone)]
+pub struct AiService {
+    chat_service: ChatService, // 直接包含 ChatService
+}
 
 impl AiService {
-    pub async fn chat_stream(app: AppHandle, prompt: String) -> AppResult<()> {
+    pub fn new(chat_service: ChatService) -> Self {
+        Self { chat_service }
+    }
+    pub async fn chat_stream(
+        self,
+        app: AppHandle,
+        session_id: i64,
+        prompt: String,
+    ) -> AppResult<()> {
         let client = Client::new();
 
-        let request_body = OllamaRequest {
-            model: "qwen2.5-coder:latest".to_string(), // ⚠️ 记得改成你本地有的模型名
-            prompt,
+        // 构造请求体
+        let request_body = OpenAIRequest {
+            model: MODEL_NAME.to_string(),
+            messages: vec![OpenAIMessage {
+                role: "user".to_string(),
+                content: prompt, // 这里简化了，实际应该把历史记录 history 传进来
+            }],
             stream: true,
         };
 
+        // 发起请求
         let mut stream = client
-            .post("http://localhost:11434/api/generate")
+            .post(API_BASE_URL)
+            .header("Authorization", format!("Bearer {}", API_KEY))
+            .header("Content-Type", "application/json")
             .json(&request_body)
             .send()
             .await?
             .bytes_stream();
 
-        // 收集完整的回复用于存库
         let mut full_response = String::new();
 
+        // 处理流式响应
         while let Some(item) = stream.next().await {
             match item {
                 Ok(bytes) => {
-                    if let Ok(text) = String::from_utf8(bytes.to_vec()) {
-                        if let Ok(json) = serde_json::from_str::<OllamaResponse>(&text) {
-                            let payload = StreamPayload {
-                                chunk: json.response.clone(),
-                                done: json.done,
-                            };
+                    let chunk_str = String::from_utf8_lossy(&bytes);
 
-                            app.emit("ai-response", &payload).unwrap();
+                    // OpenAI 的流可能会一次返回多行，也可能被截断，这里做简单的按行处理
+                    for line in chunk_str.lines() {
+                        let line = line.trim();
 
-                            full_response.push_str(&json.response);
+                        // 忽略空行和保活注释
+                        if line.is_empty() || !line.starts_with("data: ") {
+                            continue;
+                        }
+
+                        // 去掉 "data: " 前缀
+                        let json_str = &line[6..];
+
+                        // 检查结束标记
+                        if json_str == "[DONE]" {
+                            break;
+                        }
+
+                        // 解析 JSON
+                        if let Ok(response) = serde_json::from_str::<OpenAIStreamResponse>(json_str)
+                        {
+                            if let Some(choice) = response.choices.first() {
+                                if let Some(content) = &choice.delta.content {
+                                    // 1. 推送给前端
+                                    let payload = StreamPayload {
+                                        chunk: content.clone(),
+                                        done: false, // 流还没真正结束
+                                    };
+                                    app.emit("ai-response", &payload).unwrap();
+
+                                    // 2. 累加
+                                    full_response.push_str(content);
+                                }
+                            }
                         }
                     }
                 }
@@ -75,15 +134,25 @@ impl AiService {
             }
         }
 
-        // 流结束：保存完整的 AI 回复到数据库
-        // 这里我们需要一个新的 Service 方法来保存 "assistant" 的消息
-        // 为了简单，我们直接在这里调用 ChatService
+        // --- 流结束处理 ---
 
-        // 获取数据库连接 (从 app handle 拿 state 有点麻烦，这里简化处理)
-        // 在实际架构中，建议把 db 传入或者通过 AppState 获取
-        let state = app.state::<AppState>();
-        ChatService::save_message(&state.db, "assistant", &full_response).await?;
+        // 保存 AI 的完整回复到数据库
+        self.chat_service
+            .save_message(session_id, "AI", &full_response)
+            .await?;
+
+        // 通知前端结束
+        app.emit(
+            "ai-response",
+            &StreamPayload {
+                chunk: "".to_string(),
+                done: true,
+            },
+        )
+        .unwrap();
+
         app.emit("ai-response-complete", ()).unwrap();
+
         Ok(())
     }
 }
