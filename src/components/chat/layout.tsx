@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import {
   Sheet,
   SheetContent,
@@ -9,49 +10,98 @@ import { Button } from "@/components/ui/button";
 import { Menu } from "lucide-react";
 import { SidebarContent } from "./sidebar-content";
 import { ChatArea } from "./chat-area";
-// 假设你稍后会把 ChatBox 放在这，现在先用 div 占位
-// import { ChatArea } from "./chat-area";
+import { Conversation } from "@/types/types";
+import { SettingsDialog } from "./settings-dialog";
 
 export default function ChatLayout() {
   const [isMobileOpen, setIsMobileOpen] = useState(false);
 
+  // --- 状态提升 ---
+  const [sessions, setSessions] = useState<Conversation[]>([]);
+  const [currentSessionId, setCurrentSessionId] = useState<number | null>(null);
+
+  // 1. 初始化：获取会话列表
+  useEffect(() => {
+    loadSessions();
+  }, []);
+
+  async function loadSessions() {
+    try {
+      const data = await invoke<Conversation[]>("get_sessions");
+      setSessions(data);
+      // 如果有会话且当前没选中，默认选中第一个
+      if (data.length > 0 && currentSessionId === null) {
+        setCurrentSessionId(data[0].id);
+      }
+    } catch (e) {
+      console.error("获取会话失败", e);
+    }
+  }
+
+  // 2. 新建会话逻辑
+  async function handleNewChat() {
+    try {
+      // 简单起见，标题先用时间或者固定文本，未来可以让 AI 自动总结标题
+      const newSession = await invoke<Conversation>("create_new_chat", {
+        title: `新对话 ${new Date().toLocaleTimeString()}`,
+      });
+
+      // 更新列表并自动选中新建的
+      setSessions([newSession, ...sessions]);
+      setCurrentSessionId(newSession.id);
+
+      // 移动端体验：新建后自动关闭抽屉
+      setIsMobileOpen(false);
+    } catch (e) {
+      console.error("新建会话失败", e);
+    }
+  }
+
   return (
     <div className="flex h-screen w-full overflow-hidden bg-background">
-      {/* --- 桌面端侧边栏 (Desktop Sidebar) --- */}
-      {/* 关键 CSS: hidden (移动端隐藏) md:flex (桌面端显示) */}
+      {/* 桌面端侧边栏 */}
       <aside className="hidden w-64 flex-col border-r bg-muted/10 md:flex">
-        <SidebarContent />
+        <SidebarContent
+          sessions={sessions}
+          currentSessionId={currentSessionId}
+          onSelectSession={setCurrentSessionId}
+          onNewChat={handleNewChat}
+        />
       </aside>
 
-      {/* --- 移动端侧边栏 (Mobile Drawer) --- */}
+      {/* 移动端侧边栏 */}
       <Sheet open={isMobileOpen} onOpenChange={setIsMobileOpen}>
         <SheetContent side="left" className="p-0 w-72">
-          {/*为了无障碍访问，Sheet必须包含Title，如果不需要显示可以加上 hidden */}
-          <SheetTitle className="hidden">导航菜单</SheetTitle>
-          {/* 复用同一个 SidebarContent 组件 */}
-          <SidebarContent onNewChat={() => setIsMobileOpen(false)} />
+          <SheetTitle className="hidden">菜单</SheetTitle>
+          <SidebarContent
+            sessions={sessions}
+            currentSessionId={currentSessionId}
+            onSelectSession={(id) => {
+              setCurrentSessionId(id);
+              setIsMobileOpen(false); // 选中后关闭抽屉
+            }}
+            onNewChat={handleNewChat}
+          />
         </SheetContent>
       </Sheet>
 
-      {/* --- 主聊天区域 (Main Chat Area) --- */}
+      {/* 主区域 */}
       <main className="flex flex-1 flex-col min-h-0 h-[100dvh] overflow-hidden">
-        {/* 顶部导航栏 (仅移动端显示菜单按钮) */}
         <header className="flex h-14 items-center gap-2 border-b px-4 md:hidden">
           <Sheet open={isMobileOpen} onOpenChange={setIsMobileOpen}>
             <SheetTrigger asChild>
               <Button variant="ghost" size="icon" className="-ml-2">
                 <Menu className="h-5 w-5" />
-                <span className="sr-only">打开菜单</span>
               </Button>
             </SheetTrigger>
           </Sheet>
           <span className="font-semibold">Yaya AI</span>
         </header>
 
-        {/* 真正的聊天对话框区域 */}
         <div className="flex-1 flex flex-col min-h-0 overflow-hidden relative">
           <div className="h-full w-full">
-            <ChatArea />
+            {/* 传入 currentSessionId */}
+            <ChatArea sessionId={currentSessionId} />
           </div>
         </div>
       </main>

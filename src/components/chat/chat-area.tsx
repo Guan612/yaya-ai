@@ -1,118 +1,112 @@
 import { useState, useEffect, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core"; // Tauri 2.0 的 API 路径
-import { listen } from "@tauri-apps/api/event"; // 引入监听器
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { SendHorizontal, Loader2 } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { MessageBubble, Message } from "./message-bubble";
+import { MessageBubble } from "./message-bubble";
+import { Message } from "@/types/types";
 
-// 定义事件 Payload 类型
+// 接收 sessionId 参数
+interface ChatAreaProps {
+  sessionId: number | null;
+}
+
 interface StreamPayload {
   chunk: string;
   done: boolean;
 }
 
-export function ChatArea() {
+export function ChatArea({ sessionId }: ChatAreaProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-
-  // 用于自动滚动到底部
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // 1. 初始化：加载历史记录
+  // 1. 监听 sessionId 变化，加载对应的历史记录
   useEffect(() => {
+    if (sessionId === null) {
+      setMessages([]); // 没有选中会话时，清空
+      return;
+    }
+
     async function loadHistory() {
       try {
-        // 调用 Rust command: get_chat_history
-        const history = await invoke<Message[]>("get_chat_history");
+        // 调用后端：get_chat_history (带 session_id 参数)
+        // 注意：这里参数名要跟 Rust Command 定义的参数名一致 (snake_case)
+        const history = await invoke<Message[]>("get_chat_history", {
+          sessionId: sessionId,
+        });
         setMessages(history);
       } catch (error) {
         console.error("加载历史失败:", error);
       }
     }
+
+    // 切换会话时，先清空旧消息，避免闪烁
+    setMessages([]);
     loadHistory();
-  }, []);
+  }, [sessionId]); // <--- 关键依赖
 
-  // --- 新增：专门用于监听 AI 消息的 useEffect ---
+  // 2. 自动滚动 (保持不变)
   useEffect(() => {
-    // 监听 "ai-response" 事件 (流式传输)
-    const unlistenPromise = listen<StreamPayload>("ai-response", (event) => {
-      const { chunk, done } = event.payload;
+    scrollRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
 
+  // 3. 监听 AI 回复 (逻辑保持不变，因为是全局事件)
+  // 如果你想做得更细，可以在 event payload 里带上 sessionId，前端判断是否匹配当前 ID
+  useEffect(() => {
+    const unlistenPromise = listen<StreamPayload>("ai-response", (event) => {
+      const { chunk } = event.payload;
       setMessages((prev) => {
         const lastMsg = prev[prev.length - 1];
-
-        // 如果最后一条消息已经是 AI 的，就追加内容
         if (lastMsg && lastMsg.role === "assistant") {
           return [
             ...prev.slice(0, -1),
             { ...lastMsg, content: lastMsg.content + chunk },
           ];
-        }
-        // 否则（这是 AI 的第一个字），新建一条 AI 消息
-        else {
+        } else {
           return [
             ...prev,
-            {
-              id: Date.now(), // 临时 ID
-              role: "assistant",
-              content: chunk,
-            },
+            { id: Date.now(), role: "assistant", content: chunk },
           ];
         }
       });
     });
-
-    // 监听 "ai-response-complete" (可选：用于刷新真实 ID 等)
-    // ...
-
-    // 清理监听器
     return () => {
-      unlistenPromise.then((unlisten) => unlisten());
+      unlistenPromise.then((f) => f());
     };
   }, []);
 
-  // 2. 监听消息变化，自动滚动
-  useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollIntoView({ behavior: "smooth" });
-    }
-  }, [messages]);
-
-  // 3. 发送消息逻辑
   const handleSend = async () => {
-    if (!input.trim() || isLoading) return;
+    if (!input.trim() || isLoading || sessionId === null) return; // 如果没有 ID，不能发送
 
     const userContent = input.trim();
-    setInput(""); // 清空输入框
-    setIsLoading(true); // 进入加载状态
+    setInput("");
+    setIsLoading(true);
+
+    // 乐观更新
+    const optimisticMsg: Message = {
+      id: Date.now(),
+      role: "user",
+      content: userContent,
+    };
+    setMessages((prev) => [...prev, optimisticMsg]);
 
     try {
-      // 乐观更新 UI (Optimistic UI): 先把用户的消息显示出来，不需要等数据库返回
-      // 这里的 id 只是临时占位，刷新后会用数据库真实的 id
-      const optimisticMsg: Message = {
-        id: Date.now(),
-        role: "user",
+      // 调用后端：send_user_message (带 session_id)
+      await invoke("send_user_message", {
+        sessionId: sessionId,
         content: userContent,
-      };
-      setMessages((prev) => [...prev, optimisticMsg]);
-
-      // 调用 Rust 保存消息
-      // 注意：这里我们还没做 AI 回复，所以只会保存用户消息
-      await invoke("send_user_message", { content: userContent });
-
-      // TODO: 下一步我们会在这里监听 AI 的流式回复
+      });
     } catch (error) {
       console.error("发送失败:", error);
-      // 实际项目中这里应该弹出 Toast 提示
     } finally {
       setIsLoading(false);
     }
   };
 
-  // 4. 处理按 Enter 发送 (Shift+Enter 换行)
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -120,13 +114,23 @@ export function ChatArea() {
     }
   };
 
+  // 如果没有选中 Session，显示欢迎页
+  if (sessionId === null) {
+    return (
+      <div className="flex h-full w-full items-center justify-center text-muted-foreground">
+        请点击左侧“新建聊天”开始对话
+      </div>
+    );
+  }
+
   return (
-    // 1. 外层容器：h-full 撑满高度，overflow-hidden 禁止外层滚动
-    <div className="flex flex-col h-full w-full max-w-5xl mx-auto overflow-hidden">
-      {/* 2. 消息列表区：flex-1 自动占据所有剩余空间 */}
-      <div className="flex-1 overflow-hidden flex flex-col">
+    // ... JSX 结构保持不变，直接 copy 之前的 return 部分 ...
+    // 记得保留外层的 overflow-hidden 等样式
+    <div className="flex flex-col h-full w-full mx-auto overflow-hidden">
+      {/* ... Message List ... */}
+      <div className="flex-1 min-h-0 overflow-hidden relative">
         <ScrollArea className="h-full w-full px-4">
-          <div className="space-y-6 py-6">
+          <div className="flex flex-col gap-4 px-3 py-4 md:px-4 md:py-6 w-full">
             {messages.length === 0 ? (
               <div className="text-center text-muted-foreground mt-20">
                 <p>暂无消息，开始一段新的对话吧！</p>
@@ -136,21 +140,21 @@ export function ChatArea() {
                 <MessageBubble key={msg.id} message={msg} />
               ))
             )}
-            {/* 锚点：用于自动滚动到底部 */}
             <div ref={scrollRef} className="h-1" />
           </div>
         </ScrollArea>
       </div>
 
-      {/* 3. 输入框区：shrink-0 防止被压缩，z-10 确保层级 */}
+      {/* ... Input Area ... */}
       <div className="shrink-0 p-4 border-t bg-background z-10">
+        {/* Input 组件代码 ... */}
         <div className="relative flex items-end gap-2 bg-muted/30 p-2 rounded-xl border focus-within:ring-1 focus-within:ring-ring">
           <Textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="输入消息..."
-            className="min-h-[50px] max-h-[150px] w-full resize-none border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0 shadow-none"
+            className="min-h-[50px] max-h-[150px] w-full resize-none border-0 bg-transparent focus-visible:ring-0 shadow-none"
           />
           <Button
             onClick={handleSend}
@@ -165,9 +169,7 @@ export function ChatArea() {
             )}
           </Button>
         </div>
-        <div className="text-[10px] text-muted-foreground text-center mt-2">
-          由 Tauri + Rust + React 驱动
-        </div>
+        {/* Footer Text */}
       </div>
     </div>
   );
