@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::{
     entities::{conversations, messages},
     error::AppResult,
@@ -15,12 +17,13 @@ pub async fn send_user_message(
 ) -> AppResult<messages::Model> {
     // 调用 Service
     let saved_msg = state
-        .chat_service
+        .services
+        .chat
         .save_message(session_id, "user", &content)
         .await?;
 
     //AI 服务的调用
-    let ai_service = state.ai_service.clone();
+    let ai_service = state.services.ai.clone();
     let prompt = content.clone();
 
     tauri::async_runtime::spawn(async move {
@@ -38,14 +41,14 @@ pub async fn get_chat_history(
     state: State<'_, AppState>,
     session_id: i32,
 ) -> AppResult<Vec<messages::Model>> {
-    let history = state.chat_service.get_history(session_id).await?;
+    let history = state.services.chat.get_history(session_id).await?;
     Ok(history)
 }
 
 // Command 3: 清空历史
 #[tauri::command]
 pub async fn clear_chat(state: State<'_, AppState>) -> AppResult<()> {
-    state.chat_service.clear_history().await?;
+    state.services.chat.clear_history().await?;
     Ok(())
 }
 
@@ -55,13 +58,52 @@ pub async fn create_new_chat(
     state: State<'_, AppState>,
     title: String,
 ) -> AppResult<conversations::Model> {
-    let session = state.session_service.create_session(&title).await?;
+    let session = state.services.sessions.create_session(&title).await?;
     Ok(session)
 }
 
 //获取会话列表
 #[tauri::command]
 pub async fn get_sessions(state: State<'_, AppState>) -> AppResult<Vec<conversations::Model>> {
-    let sessions = state.session_service.get_all_sessions().await?;
+    let sessions = state.services.sessions.get_all_sessions().await?;
     Ok(sessions)
+}
+
+//一次性获取所有配置
+#[tauri::command]
+pub async fn get_settings(state: State<'_, AppState>) -> AppResult<HashMap<String, String>> {
+    let mut map = HashMap::new();
+    map.insert(
+        "api_key".into(),
+        state.services.settings.get_setting("api_key", "").await,
+    );
+    map.insert(
+        "base_url".into(),
+        state
+            .services
+            .settings
+            .get_setting("base_url", "https://api.openai.com/v1/chat/completions")
+            .await,
+    );
+    map.insert(
+        "model".into(),
+        state
+            .services
+            .settings
+            .get_setting("model", "gpt-3.5-turbo")
+            .await,
+    );
+    Ok(map)
+}
+
+// 保存配置
+#[tauri::command]
+pub async fn save_settings(
+    state: State<'_, AppState>,
+    config: HashMap<String, String>,
+) -> AppResult<()> {
+    for (k, v) in config {
+        state.services.settings.save_setting(&k, &v).await?;
+    }
+    Ok(())
 }

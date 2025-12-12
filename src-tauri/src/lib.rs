@@ -8,10 +8,7 @@ pub mod state;
 
 use tauri::Manager;
 
-use crate::{
-    services::{ai::AiService, chat::ChatService, session::SessionService},
-    state::AppState,
-};
+use crate::{services::AppServices, state::AppState};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -23,7 +20,9 @@ pub fn run() {
             commands::get_chat_history,
             commands::clear_chat,
             commands::create_new_chat,
-            commands::get_sessions
+            commands::get_sessions,
+            commands::get_settings,
+            commands::save_settings,
         ])
         .setup(|app| {
             // --- 数据库初始化开始 ---
@@ -34,21 +33,12 @@ pub fn run() {
                 match db::establish_connection(&handle).await {
                     Ok(db) => {
                         println!("数据库连接成功！");
-                        // 将数据库连接由 Tauri 管理 (Manage State)
-                        // 1. 初始化 ChatService
-                        let chat_service = ChatService::new(&db);
+                        // --- 变化在这里 ---
+                        // 以前：写了五六行来初始化
+                        // 现在：只要一行！
+                        let services = AppServices::new(&db);
 
-                        // 2. 初始化 AiService (注入 ChatService)
-                        let ai_service = AiService::new(chat_service.clone());
-
-                        let session_service = SessionService::new(&db);
-
-                        // 3. 存入 State
-                        handle.manage(AppState {
-                            chat_service,
-                            ai_service,
-                            session_service,
-                        });
+                        handle.manage(AppState { services });
                     }
                     Err(e) => {
                         eprintln!("数据库初始化失败: {}", e);
