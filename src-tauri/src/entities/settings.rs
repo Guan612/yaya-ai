@@ -4,25 +4,16 @@ use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
-#[sea_orm(table_name = "conversations")]
+#[sea_orm(table_name = "settings")]
 pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i64,
-    pub title: String,
-    pub created_at: Option<DateTimeUtc>,
-    pub model_id: Option<i64>,
+    #[sea_orm(unique)]
+    pub key: String,
+    pub value: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-pub enum Relation {
-    #[sea_orm(has_many = "super::messages::Entity")]
-    Messages,
-}
-
-impl Related<super::messages::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::Messages.def()
-    }
-}
+pub enum Relation {}
 
 impl ActiveModelBehavior for ActiveModel {}
