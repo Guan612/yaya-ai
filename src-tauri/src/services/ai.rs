@@ -1,14 +1,10 @@
+use crate::services::settings::SettingsService;
 use crate::state::AppState;
 use crate::{error::AppResult, services::chat::ChatService};
 use futures::StreamExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
-
-// --- 1. 配置区域 (你可以改为从环境变量或设置里读取) ---
-const API_BASE_URL: &str = "http://127.0.0.1:1337/v1/chat/completions"; // 或者你的第三方中转地址
-const API_KEY: &str = "123"; // 替换你的 Key
-const MODEL_NAME: &str = "qiyue0726\\neko_f16_gemma_3_270m_it"; // 或者 deepseek-chat, moonshot-v1 等
 
 // --- 2. OpenAI 请求结构 ---
 #[derive(Serialize)]
@@ -51,12 +47,16 @@ struct StreamPayload {
 
 #[derive(Clone)]
 pub struct AiService {
-    chat_service: ChatService, // 直接包含 ChatService
+    chat_service: ChatService,         // 直接包含 ChatService
+    settings_service: SettingsService, // 注入 SettingsService
 }
 
 impl AiService {
-    pub fn new(chat_service: ChatService) -> Self {
-        Self { chat_service }
+    pub fn new(chat_service: ChatService, settings_service: SettingsService) -> Self {
+        Self {
+            chat_service,
+            settings_service,
+        }
     }
     pub async fn chat_stream(
         self,
@@ -66,9 +66,28 @@ impl AiService {
     ) -> AppResult<()> {
         let client = Client::new();
 
+        // 1. 动态读取配置
+        let api_key = self.settings_service.get_setting("api_key", "").await;
+        let base_url = self
+            .settings_service
+            .get_setting("base_url", "https://api.openai.com/v1/chat/completions")
+            .await;
+        let model = self
+            .settings_service
+            .get_setting("model", "gpt-3.5-turbo")
+            .await;
+
+        //配置api key
+        if api_key.is_empty() {
+            // 可以在这里 emit 一个错误事件告诉前端“请先配置 API Key”
+            let res = app.emit("need-api-key", "需要apikey").unwrap();
+            eprintln!("API Key is missing!");
+            return Ok(res);
+        }
+
         // 构造请求体
         let request_body = OpenAIRequest {
-            model: MODEL_NAME.to_string(),
+            model: model.to_string(),
             messages: vec![OpenAIMessage {
                 role: "user".to_string(),
                 content: prompt, // 这里简化了，实际应该把历史记录 history 传进来
@@ -78,8 +97,8 @@ impl AiService {
 
         // 发起请求
         let mut stream = client
-            .post(API_BASE_URL)
-            .header("Authorization", format!("Bearer {}", API_KEY))
+            .post(base_url)
+            .header("Authorization", format!("Bearer {}", api_key))
             .header("Content-Type", "application/json")
             .json(&request_body)
             .send()
